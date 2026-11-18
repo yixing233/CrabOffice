@@ -15,8 +15,38 @@ namespace CrabOffice.WordHost
         private readonly Word.Application _app;
         private readonly Dictionary<Guid, Word.Document> _docMap = new Dictionary<Guid, Word.Document>();
         private readonly Dictionary<Guid, Word.Window> _winMap = new Dictionary<Guid, Word.Window>();
-        private readonly Dictionary<object, Guid> _docRev = new Dictionary<object, Guid>();
+        private readonly Dictionary<object, Guid> _docRev = new Dictionary<object, Guid>();   // RCW fast path (RCW identity is NOT reliable across acquisitions)
         private readonly Dictionary<object, Guid> _winRev = new Dictionary<object, Guid>();
+        private readonly Dictionary<string, Guid> _docKeyMap = new Dictionary<string, Guid>(); // identityKey -> docId (A13: path/Name is the merge key)
+        private readonly Dictionary<Guid, string> _docKeyById = new Dictionary<Guid, string>();
+
+        /// <summary>Stable per-session identity: canonical path for saved docs, unique Name for unsaved ones.</summary>
+        private static string IdentityKey(Word.Document doc)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(doc.Path)) return doc.FullName.ToLowerInvariant();
+                return doc.Name.ToLowerInvariant();
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Re-map identity after Save/SaveAs changed the key; keeps the same docId.</summary>
+        private void ReKeyDoc(Word.Document doc, Guid docId)
+        {
+            if (doc == null || docId == Guid.Empty) return;
+            var key = IdentityKey(doc);
+            if (key == null) return;
+            string oldKey;
+            if (_docKeyById.TryGetValue(docId, out oldKey))
+            {
+                if (oldKey == key) return;
+                _docKeyMap.Remove(oldKey);
+            }
+            _docKeyMap[key] = docId;
+            _docKeyById[docId] = key;
+            ThisAddIn.SafeLog("rekey doc=" + Short(docId) + " -> " + key);
+        }
         private readonly Guid _sessionId = Guid.NewGuid();
 
         public event Action<DomainEvent> HostEvent;
@@ -38,11 +68,17 @@ namespace CrabOffice.WordHost
         {
             if (doc == null) return Guid.Empty;
             Guid g;
-            if (!_docRev.TryGetValue(doc, out g))
+            if (_docRev.TryGetValue(doc, out g)) { _docMap[g] = doc; return g; }
+            var key = IdentityKey(doc);
+            if (key != null && _docKeyMap.TryGetValue(key, out g))
             {
-                g = Guid.NewGuid();
+                // same document reached via a different RCW (multi-window / reacquired) — merge identities (A13 fix)
                 _docRev[doc] = g; _docMap[g] = doc;
+                return g;
             }
+            g = Guid.NewGuid();
+            _docRev[doc] = g; _docMap[g] = doc;
+            if (key != null) { _docKeyMap[key] = g; _docKeyById[g] = key; }
             return g;
         }
         private Guid WinId(Word.Window win)
@@ -68,6 +104,7 @@ namespace CrabOffice.WordHost
         private void OnDocumentOpen(Word.Document doc)
         {
             var docId = DocId(doc);
+            ReKeyDoc(doc, docId);
             var win = ActiveWindowSafe();
             var winId = win != null ? WinId(win) : Guid.Empty;
             Emit(EventType.DocOpened, docId, winId, doc.Name, PathSafe(doc), null, doc.ReadOnly);
@@ -86,6 +123,7 @@ namespace CrabOffice.WordHost
         {
             // saved-state confirmation arrives via reconcile after save completes
             var docId = DocId(doc);
+            ReKeyDoc(doc, docId);
             Emit(EventType.DocSaved, docId, Guid.Empty, doc.Name, PathSafe(doc));
         }
 
@@ -126,16 +164,18 @@ namespace CrabOffice.WordHost
         public HostSnapshot EnumerateSnapshot()
         {
             var snap = new HostSnapshot();
+            var seenDocs = new HashSet<Guid>();
             foreach (Word.Window win in _app.Windows)
             {
                 Word.Document doc = null;
                 try { doc = win.Document; } catch { continue; }
                 var docId = DocId(doc); var winId = WinId(win);
-                snap.Documents.Add(new HostSnapshot.DocInfo
-                {
-                    DocumentId = docId, DisplayName = doc.Name, Path = PathSafe(doc),
-                    IsDirty = !doc.Saved, IsReadOnly = doc.ReadOnly
-                });
+                if (seenDocs.Add(docId))
+                    snap.Documents.Add(new HostSnapshot.DocInfo
+                    {
+                        DocumentId = docId, DisplayName = doc.Name, Path = PathSafe(doc),
+                        IsDirty = !doc.Saved, IsReadOnly = doc.ReadOnly
+                    });
                 snap.Windows.Add(new HostSnapshot.WinInfo
                 {
                     WindowId = winId, DocumentId = docId, IsActive = ReferenceEquals(win, ActiveWindowSafe()), State = WindowStateEx.Normal
