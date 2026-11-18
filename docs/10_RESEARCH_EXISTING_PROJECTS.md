@@ -47,3 +47,11 @@ GitHub API + 原始 README 抓取，关键词：word add-in tabs / office multi 
 - TabsForWord 的 native host 依赖未文档化窗口类名（_WwG 等），Office 更新可能破坏——其设计含回退链（启发式→CTP），采纳后需纳入我们的回归矩阵
 - 单窗口模式（S2）依赖非公开宿主行为，TabsForWord 作者的拒绝态度是保守选择而非技术证伪；我们已有初步 PoC 证据，继续按闸口推进但保持"失败即如实降级"纪律
 - 两个项目均为 AI 辅助生成的单维护者代码，采纳前应跑一遍其手动/E2E 验证清单
+
+## 6. 决策记录（2026-11-18）
+
+- **TabsForWord 已装机实测通过**：MIT 协议，本机从源码构建（需把 csproj 的 GAC PIA 路径改为 VS 共享目录），HKCU 免管理员安装，原生窗口内标签栏、切换/固定/拖拽/着色/右键/Ctrl+Tab/搜索溢出全部正常。
+- **S2 单窗口模式实验终止（用户决策）**：将 S2 隐藏周转集成到 TabsForWord 后，功能本身可用（探针证实单可见窗口、翻转正确），但 SW_HIDE/SW_SHOW 周期与 TabsForWord 的 Reserve（锚点下移）机制相互干扰，每次切换预留区累积漂移（用户截图证实空白持续增大）。已整体回滚到上游版本，放弃单窗口功能。
+  - 技术备注：曾实现"隐藏时恢复锚点"的修复方向（NativeTabHost.UpdateLayout 加 IsWindowVisible 守卫），未及完整验证即按用户决策终止；若未来重启单窗口，应从该方向继续，并处理 S2 与第三方布局预留机制的耦合。
+- **当前产品形态**：TabsForWord（上游原版）作为 Word 标签层；CrabOffice.WordHost 已停用（LoadBehavior=0）；CrabOffice 后续按 PRD 从 B 组（工作区）起步，复用/对照其 MIT 代码。
+- 环境备忘：构建 TabsForWord 需 VS MSBuild（dotnet CLI 无法解析裸名 PIA）；git 在 D:\Program Files\Git\cmd；沙箱子进程需注入完整环境变量。
