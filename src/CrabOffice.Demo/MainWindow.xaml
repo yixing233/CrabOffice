@@ -1,0 +1,20 @@
+<Window x:Class="CrabOffice.Demo.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:CrabOffice.UI;assembly=CrabOffice.UI"
+        Title="CrabOffice Demo - Tab Bar Harness" Height="480" Width="760">
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Top">
+            <ui:TabBarControl x:Name="TabBar" Height="36" />
+            <StackPanel Orientation="Horizontal" Margin="8,4">
+                <Button Content="模拟打开文档" Padding="8,3" Margin="0,0,8,0" Click="OnOpenDoc" />
+                <Button Content="模拟编辑(脏)" Padding="8,3" Margin="0,0,8,0" Click="OnMakeDirty" />
+                <Button Content="模拟保存" Padding="8,3" Margin="0,0,8,0" Click="OnSave" />
+                <Button Content="对账(Reconcile)" Padding="8,3" Margin="0,0,8,0" Click="OnReconcile" />
+                <TextBlock VerticalAlignment="Center" Foreground="Gray" Text="模拟宿主事件驱动真实标签栏" />
+            </StackPanel>
+        </StackPanel>
+        <TextBox x:Name="Log" IsReadOnly="True" VerticalScrollBarVisibility="Auto"
+                 FontFamily="Consolas" Background="#FAFAFA" />
+    </DockPanel>
+</Window>
