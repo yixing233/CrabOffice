@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
 using CrabOffice.Core;
 using Word = Microsoft.Office.Interop.Word;
 
@@ -11,6 +13,73 @@ namespace CrabOffice.WordHost
     /// </summary>
     public sealed class WordHostAdapter : IWordHostAdapter
     {
+        // ---- Win32 (user-level ShowWindow only; no injection, no SetParent) ----
+        [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+        private const int SW_HIDE = 0, SW_SHOW = 5;
+ 
+        // ---- S2 HideTurnover (A04 PoC-SW-1) ----
+        private Guid _visibleWindowId = Guid.Empty;
+        private readonly List<Guid> _hiddenWindows = new List<Guid>();
+        private readonly bool _singleWindowMode = LoadSingleWindowFlag();
+ 
+        private static bool LoadSingleWindowFlag()
+        {
+            try
+            {
+                var p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CrabOffice", "config.json");
+                if (File.Exists(p)) return File.ReadAllText(p).IndexOf("singleWindow", StringComparison.OrdinalIgnoreCase) >= 0
+                    && File.ReadAllText(p).IndexOf("false", StringComparison.OrdinalIgnoreCase) < 0;
+            }
+            catch { }
+            return true; // default ON for the PoC
+        }
+ 
+        private IntPtr HwndOf(Guid windowId)
+        {
+            Word.Window win;
+            if (!_winMap.TryGetValue(windowId, out win)) return IntPtr.Zero;
+            try { return new IntPtr(win.Hwnd); } catch { return IntPtr.Zero; }
+        }
+ 
+        /// <summary>S2 turnover: keep exactly one visible Word window; hide the rest after the new one is active.</summary>
+        private void EnforceSingleWindow(Guid activeWinId)
+        {
+            if (!_singleWindowMode || activeWinId == Guid.Empty) return;
+            try
+            {
+                var activeHwnd = HwndOf(activeWinId);
+                if (activeHwnd == IntPtr.Zero) return;
+                ShowWindow(activeHwnd, SW_SHOW);
+                _hiddenWindows.Remove(activeWinId);
+                if (_visibleWindowId != Guid.Empty && _visibleWindowId != activeWinId)
+                {
+                    var oldHwnd = HwndOf(_visibleWindowId);
+                    // guard: never hide a window that still has keyboard focus (modal dialogs etc.)
+                    if (oldHwnd != IntPtr.Zero && GetForegroundWindow() != oldHwnd)
+                    {
+                        ShowWindow(oldHwnd, SW_HIDE);
+                        if (!_hiddenWindows.Contains(_visibleWindowId)) _hiddenWindows.Add(_visibleWindowId);
+                        ThisAddIn.SafeLog("S2 hide old win " + Short(_visibleWindowId));
+                    }
+                }
+                _visibleWindowId = activeWinId;
+            }
+            catch (Exception ex) { ThisAddIn.SafeLog("S2 enforce failed: " + ex.Message); }
+        }
+ 
+        /// <summary>Reverse operation (A16): restore every hidden window to visible.</summary>
+        public void RestoreNativeState()
+        {
+            foreach (var id in _hiddenWindows.ToArray())
+            {
+                var h = HwndOf(id);
+                if (h != IntPtr.Zero) ShowWindow(h, SW_SHOW);
+            }
+            _hiddenWindows.Clear();
+            _visibleWindowId = Guid.Empty;
+            ThisAddIn.SafeLog("S2 restore native state, count restored ok");
+        }
         private readonly ThisAddIn _addIn;
         private readonly Word.Application _app;
         private readonly Dictionary<Guid, Word.Document> _docMap = new Dictionary<Guid, Word.Document>();
@@ -100,6 +169,30 @@ namespace CrabOffice.WordHost
         }
         private static string Short(Guid g) { return g == Guid.Empty ? "-" : g.ToString("N").Substring(0, 8); }
 
+        /// <summary>Startup-time S2 enforcement: active window stays visible, all others hide (no activation events at startup).</summary>
+        public void InitializeSingleWindow(HostSnapshot snap)
+        {
+            if (!_singleWindowMode) return;
+            foreach (var w in snap.Windows)
+            {
+                var h = HwndOf(w.WindowId);
+                if (h == IntPtr.Zero) continue;
+                if (w.IsActive)
+                {
+                    ShowWindow(h, SW_SHOW);
+                    _visibleWindowId = w.WindowId;
+                    _hiddenWindows.Remove(w.WindowId);
+                }
+                else
+                {
+                    ShowWindow(h, SW_HIDE);
+                    if (!_hiddenWindows.Contains(w.WindowId)) _hiddenWindows.Add(w.WindowId);
+                    ThisAddIn.SafeLog("S2 startup-hide win " + Short(w.WindowId));
+                }
+            }
+            ThisAddIn.SafeLog("S2 init: visible=" + Short(_visibleWindowId) + " hidden=" + _hiddenWindows.Count);
+        }
+
         // ---- Word events (A02) ----
         private void OnDocumentOpen(Word.Document doc)
         {
@@ -133,6 +226,7 @@ namespace CrabOffice.WordHost
             Emit(EventType.WindowCreated, docId, winId, doc.Name, PathSafe(doc), null, doc.ReadOnly);
             Emit(EventType.WindowActivated, docId, winId);
             SyncDirtyState(doc, docId);
+            EnforceSingleWindow(winId);   // A04 PoC-SW-1
         }
 
         private void OnWindowDeactivate(Word.Document doc, Word.Window win)

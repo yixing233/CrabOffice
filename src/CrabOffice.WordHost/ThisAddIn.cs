@@ -35,6 +35,7 @@ namespace CrabOffice.WordHost
                 // initial snapshot: documents already open when add-in loads (A02)
                 var snap = Adapter.EnumerateSnapshot();
                 Registry.Reconcile(snap);
+                Adapter.InitializeSingleWindow(snap);           // A04 PoC-SW-1: collapse to one visible window
                 foreach (var win in snap.Windows) Presenter.EnsurePane(win.WindowId);
                 SafeLog("startup ok, windows=" + snap.Windows.Count);
             }
@@ -48,6 +49,7 @@ namespace CrabOffice.WordHost
         {
             try
             {
+                Adapter?.RestoreNativeState();   // unhide all windows (A16 reverse op)
                 Presenter?.DisposeAll();
                 Registry?.ApplyHostEvent(new DomainEvent(EventType.HostShutdown, Guid.Empty));
                 SafeLog("shutdown ok");
