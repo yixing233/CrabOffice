@@ -55,3 +55,21 @@ GitHub API + 原始 README 抓取，关键词：word add-in tabs / office multi 
   - 技术备注：曾实现"隐藏时恢复锚点"的修复方向（NativeTabHost.UpdateLayout 加 IsWindowVisible 守卫），未及完整验证即按用户决策终止；若未来重启单窗口，应从该方向继续，并处理 S2 与第三方布局预留机制的耦合。
 - **当前产品形态**：TabsForWord（上游原版）作为 Word 标签层；CrabOffice.WordHost 已停用（LoadBehavior=0）；CrabOffice 后续按 PRD 从 B 组（工作区）起步，复用/对照其 MIT 代码。
 - 环境备忘：构建 TabsForWord 需 VS MSBuild（dotnet CLI 无法解析裸名 PIA）；git 在 D:\Program Files\Git\cmd；沙箱子进程需注入完整环境变量。
+
+## 7. 侧栏 AI 方向调研与决策（2026-11-19）
+
+用户决策：放弃标签功能（TabsForWord 保留装机但不做二次开发），转向**侧栏 AI 插件**。
+
+### 调研结论
+- **选定 Kuingsmile/word-GPT-Plus（1386★，MIT）**：Office.js Copilot 风格侧栏，Chat + Agent（LangChain，25+ 文档工具）双模式，多模型（OpenAI 兼容/DeepSeek 直连、Gemini、Groq、Ollama 本地），Markdown→Word 样式转换，流式响应，本地存储。活跃维护（本月更新）。
+- 对照 CrabOffice PRD：覆盖 D01（润色/翻译/改写）、D02（文档问答，Agent 读全文）、D06（受限工具执行器）主干功能。
+
+### 安装形态（本机已完成）
+- 即时使用方式：官方托管前端（word.msq.pub）+ 侧载 manifest
+- 已自动化：manifest 下载至 Documents\WordGPT、共享 \\localhost\WordGPT、HKCU Wef\TrustedCatalogs 注册
+- 用户侧载路径：插入 → 我的加载项 → 共享文件夹 → GPT Plus → 添加，Settings 配 API Key
+- 要求：Word 2016+ retail/365、WebView2 Runtime、.docx 格式
+
+### 与原 PRD 的映射
+- D 组主干被 word-GPT-Plus 覆盖 → CrabOffice 不再自研通用侧栏 AI；差异化候选：本地 LangGraph sidecar（RAG/论文审查/术语一致性）作为其外部扩展，或按用户实际痛点另立方向
+- B/C 组（工作区/效率）方向不变，待用户痛点清单确定优先级
